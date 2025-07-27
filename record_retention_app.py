@@ -11,7 +11,9 @@ from sentence_transformers import SentenceTransformer, util
 from PIL import Image
 import io
 import zipfile
+import re
 from xml.etree import ElementTree as ET
+from collections import Counter
 
 st.set_page_config(page_title="📁 Washington Records Retention Assistant")
 st.title("📁 Washington Records Retention Assistant")
@@ -74,18 +76,110 @@ def extract_text(uploaded_file):
     else:
         return ""
 
+def clean_document_text(raw_text):
+    # Split into lines and remove whitespace
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+
+    # Remove lines from Table of Contents or Index sections
+    cleaned_lines = []
+    skip = False
+    for line in lines:
+        if re.search(r'table of contents | indexes', line, re.IGNORECASE):
+            skip = True
+        elif skip and re.match(r'^\s*\d+(\.\d+)*\s*$', line):  # Likely index entry
+            continue
+        elif skip and len(line) < 30:
+            continue
+        else:
+            skip = False
+            cleaned_lines.append(line)
+
+    # Filter out lines that are too short or mostly digits/symbols
+    def is_low_value(line):
+        return (
+            len(line) < 5 or
+            sum(c.isalpha() for c in line) / max(len(line), 1) < 0.3
+        )
+
+    filtered = [line for line in cleaned_lines if not is_low_value(line)]
+
+    # Remove repeated lines (common headers/footers)
+    line_counts = Counter(filtered)
+    rare_lines = [line for line in filtered if line_counts[line] < 3]
+
+    return "\n".join(rare_lines)
+
+    
 # Match document text to best retention category
-def match_retention(text, rules_df):
+def match_retention(text, rules_df, top_n=3):
     doc_embedding = model.encode(text, convert_to_tensor=True)
     rule_embeddings = model.encode(rules_df['category_description'].tolist(), convert_to_tensor=True)
     similarities = util.cos_sim(doc_embedding, rule_embeddings)[0]
-    top_idx = similarities.argmax().item()
-    return {
-        "category": rules_df.iloc[top_idx]['category_name'],
-        "description": rules_df.iloc[top_idx]['category_description'],
-        "retention": rules_df.iloc[top_idx]['retention_period'],
-        "score": float(similarities[top_idx])
-    }
+
+    # Add a keyword match boost (optional hybrid scoring)
+    boosted_scores = []
+    for idx, row in rules_df.iterrows():
+        score = float(similarities[idx])
+        if any(word.lower() in text.lower() for word in row['category_description'].split()):
+            score += 0.05  # small bonus for keyword overlap
+        boosted_scores.append((score, idx))
+
+    top_indices = sorted(boosted_scores, reverse=True)[:top_n]
+    
+    matches = []
+    for score, idx in top_indices:
+        matches.append({
+            "category": rules_df.iloc[idx]['category_name'],
+            "description": rules_df.iloc[idx]['category_description'],
+            "retention": rules_df.iloc[idx]['retention_period'],
+            "source_file": rules_df.iloc[idx].get('source_file', 'N/A'),
+            "score": round(score, 3)
+        })
+
+    return matches
+
+def match_retention_hybrid(text, rules_df, top_n=3):
+    # Lowercased doc text for keyword matching
+    text_lower = text.lower()
+    
+    # Step 1: Tokenize doc text for simple keyword match
+    doc_tokens = set(re.findall(r'\b\w+\b', text_lower))
+
+    # Step 2: Precompute rule embeddings
+    rule_embeddings = model.encode(rules_df['category_description'].tolist(), convert_to_tensor=True)
+    doc_embedding = model.encode(text, convert_to_tensor=True)
+    similarities = util.cos_sim(doc_embedding, rule_embeddings)[0]
+
+    scores = []
+    for idx, row in rules_df.iterrows():
+        desc = row['category_description']
+        desc_lower = desc.lower()
+        desc_tokens = set(re.findall(r'\b\w+\b', desc_lower))
+
+        # Simple keyword overlap ratio
+        overlap = len(doc_tokens & desc_tokens) / max(len(desc_tokens), 1)
+
+        # Embed-based similarity
+        sim_score = float(similarities[idx])
+
+        # Final hybrid score: weight keyword overlap heavily
+        final_score = (0.7 * overlap) + (0.3 * sim_score)
+        scores.append((final_score, idx))
+
+    # Get top N matches
+    top_indices = sorted(scores, reverse=True)[:top_n]
+
+    matches = []
+    for score, idx in top_indices:
+        matches.append({
+            "category": rules_df.iloc[idx]['category_name'],
+            "description": rules_df.iloc[idx]['category_description'],
+            "retention": rules_df.iloc[idx]['retention_period'],
+            "source_file": rules_df.iloc[idx].get('source_file', 'N/A'),
+            "score": round(score, 3)
+        })
+
+    return matches
 
 # Confidence level mapping
 def get_confidence_level(score):
@@ -96,11 +190,45 @@ def get_confidence_level(score):
     else:
         return "Low", "🔴 Low (< 0.60): Needs review"
 
+def file_for_testing(is_scheduler):
+    if is_scheduler:
+        static_doc_paths = [
+            "retention-schedule.pdf",
+            "DOL-general.pdf"
+        ]
+    else:
+        static_doc_paths = [
+            "Testing-document-2.pdf"
+        ]
+
+    uploaded_files = []
+    for path in static_doc_paths:
+        with open(path, "rb") as f:
+            # Mimic uploaded file structure
+            uploaded_files.append(type("File", (), {
+                "name": os.path.basename(path),
+                "read": lambda f=f: f.read(),
+                "type": f"application/{os.path.splitext(path)[1][1:]}"
+            })())
+
+
+
 # Upload and parse retention schedule
-retention_file = st.file_uploader("📎 Upload a Retention Schedule (PDF)", type="pdf")
-if retention_file:
-    retention_df = extract_retention_from_pdf(retention_file)
-    st.success(f"✅ Retention schedule '{retention_file.name}' loaded with {len(retention_df)} categories.")
+#retention_files = file_for_testing(is_scheduler=True)
+   
+retention_files = st.file_uploader("📎 Upload Retention Schedules (PDF)", type="pdf", accept_multiple_files=True)
+if retention_files:
+    all_rules = []
+    for file in retention_files:
+        extracted = extract_retention_from_pdf(file)
+        extracted["source_file"] = file.name  # Add source tracking
+        all_rules.append(extracted)
+    retention_df = pd.concat(all_rules, ignore_index=True)
+    print(retention_df)
+    st.success(f"✅ Loaded {len(retention_df)} total retention categories from {len(retention_files)} schedule(s).")
+    
+    #uploaded_files = file_for_testing(is_scheduler=False)
+    
 
     # Upload multiple documents
     uploaded_files = st.file_uploader("📄 Upload Documents to Classify (PDF, DOCX, TXT, Images)", type=["pdf", "docx", "txt", "png", "jpg"], accept_multiple_files=True)
@@ -108,20 +236,35 @@ if retention_file:
     if uploaded_files:
         log_entries = []
         for uploaded_file in uploaded_files:
+
             with st.expander(f"📄 Document: {uploaded_file.name}", expanded=True):
                 text = extract_text(uploaded_file)
+                text = clean_document_text(text)
+                
                 if not text.strip():
                     st.warning("⚠️ No readable text found.")
                     continue
 
                 match = match_retention(text, retention_df)
-                level, definition = get_confidence_level(match['score'])
+                level, definition = get_confidence_level(match[0]['score'])
 
-                st.markdown(f"**Suggested Category**: {match['category']}")
-                st.markdown(f"**Retention Period**: {match['retention']}")
-                st.markdown(f"**Description**: {match['description']}")
+                st.markdown(f"**Suggested Category**: {match[0]['category']}")
+                st.markdown(f"**Retention Period**: {match[0]['retention']}")
+                st.markdown(f"**Description**: {match[0]['description']}")
                 st.markdown(f"**Confidence Level**: {definition}")
-                st.markdown(f"**Schedule Used**: {retention_file.name}")
+                st.markdown(f"**Schedule Used**: {match[0]['source_file']}")
+
+                st.markdown(f"**Suggested Category**: {match[1]['category']}")
+                st.markdown(f"**Retention Period**: {match[1]['retention']}")
+                st.markdown(f"**Description**: {match[1]['description']}")
+                st.markdown(f"**Confidence Level**: {definition}")
+                st.markdown(f"**Schedule Used**: {match[1]['source_file']}")
+
+                st.markdown(f"**Suggested Category**: {match[2]['category']}")
+                st.markdown(f"**Retention Period**: {match[2]['retention']}")
+                st.markdown(f"**Description**: {match[2]['description']}")
+                st.markdown(f"**Confidence Level**: {definition}")
+                st.markdown(f"**Schedule Used**: {match[2]['source_file']}")
 
                 confirm_key = f"confirm_{uploaded_file.name}"
                 edit_key = f"edit_{uploaded_file.name}"
@@ -139,7 +282,7 @@ if retention_file:
                             "override_retention": match['retention'],
                             "confidence_level": level,
                             "confidence_score": match['score'],
-                            "retention_schedule": retention_file.name
+                            "retention_schedule": retention_files.name
                         })
                         st.success(f"💾 Confirmed and saved for {uploaded_file.name}")
 
@@ -158,7 +301,7 @@ if retention_file:
                                 "override_retention": override_retention,
                                 "confidence_level": level,
                                 "confidence_score": match['score'],
-                                "retention_schedule": retention_file.name
+                                "retention_schedule": match['source_file']
                             })
                             st.success(f"💾 Edited and saved for {uploaded_file.name}")
 
