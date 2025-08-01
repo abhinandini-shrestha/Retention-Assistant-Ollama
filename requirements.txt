@@ -1,8 +1,11 @@
 streamlit
-sentence-transformers
+pandas
 pdfplumber
-python-docx
 pytesseract
-Pillow
 docx2txt
-pymupdf
+PyMuPDF
+sentence-transformers
+Pillow
+spacy
+torch  # Required by sentence-transformers
+scikit-learn  # Required by sentence-transformers
