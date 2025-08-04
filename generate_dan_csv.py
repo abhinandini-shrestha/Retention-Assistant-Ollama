@@ -5,10 +5,8 @@ import tempfile
 import pdfplumber
 from datetime import datetime
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+from retention_utils import extract_keywords
 
-def extract_keywords(text):
-    words = re.findall(r'\b\w+\b', text.lower())
-    return ', '.join(sorted(set(w for w in words if w not in ENGLISH_STOP_WORDS and len(w) > 3)))
 
 def extract_retention_table(pdf_file):
     rules = []
