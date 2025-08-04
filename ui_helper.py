@@ -21,14 +21,14 @@ def render_read_only_view(top, matches):
     st.markdown(f"**Retention**: {top['retention_period']}")
     st.markdown(f"**Designation**: {top['designation']}")
     st.markdown(f"**Confidence Score:** {top['match_score'] * 100:.0f}%")
-    st.markdown("**Top 3 Matches:**")
+    st.markdown("**Other Relevent Matches:**")
     top_matches_df = pd.DataFrame([
         {
             "DAN": m["dan"],
             "Retention": m["retention_period"],
             "Score (%)": f"{m['match_score'] * 100:.1f}%"
         }
-        for m in matches[:3]
+        for m in matches[1:3]
     ])
 
     st.table(top_matches_df)

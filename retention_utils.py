@@ -13,8 +13,14 @@ from sentence_transformers import util, SentenceTransformer
 import spacy
 import yake
 
+# Lazy-loaded global model
+_nlp = None
+
 def load_spacy_model():
-    return spacy.load("en_core_web_sm")
+    global _nlp
+    if _nlp is None:
+        _nlp = spacy.load("en_core_web_sm")
+    return _nlp
 
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
@@ -31,33 +37,95 @@ def build_keyword_stats(rules_df):
         all_words.extend(words)
     return Counter(all_words)
 
-def match_retention_priority(text, schedule_df, model, keyword_stats, top_n=3, keyword_boost_weight=0.1):
-    clean_text = normalize_text(text)
-    doc_words = set(clean_text.split())
-    doc_embedding = model.encode([clean_text], convert_to_tensor=True)
+def load_valid_feedback(feedback_path, retention_df):
+    try:
+        feedback_df = pd.read_csv(feedback_path)
+    except Exception:
+        return pd.DataFrame()  # return empty if not loadable
 
-    feedback_keywords = load_feedback_keywords()
+    if feedback_df.empty:
+        return pd.DataFrame()
 
-    scored_matches = []
-    for _, row in schedule_df.iterrows():
-        dan = row["dan"]
-        desc = normalize_text(row["description"])
-        desc_words = set(desc.split())
+    # Drop rows with missing required fields
+    required_cols = {"was_correct", "user_dan", "predicted_dan", "description", "summary_text"}
+    if not required_cols.issubset(feedback_df.columns):
+        return pd.DataFrame()
 
-        #overlap = doc_words & desc_words
-        #rarity_score = sum(1 / (keyword_stats[w] + 1) for w in overlap)
+    # Validate correctness logic
+    invalid_rows = feedback_df[
+        ((feedback_df["was_correct"] == True) & (feedback_df["user_dan"] != feedback_df["predicted_dan"])) |
+        ((feedback_df["was_correct"] == False) & (feedback_df["user_dan"] == feedback_df["predicted_dan"]))
+    ]
 
-        entry_embedding = model.encode([desc], convert_to_tensor=True)
-        base_score = float(util.cos_sim(doc_embedding, entry_embedding)[0][0]) #usually between 0.3–0.9
+    feedback_df = feedback_df.drop(index=invalid_rows.index)
 
-        # Boost score if user keywords overlap
-        user_kw = feedback_keywords.get(dan, [])
-        overlap = [kw for kw in user_kw if kw in doc_text]
-        boost = keyword_boost_weight * len(overlap)
+    # Keep only feedback whose DAN is in current schedule
+    valid_dans = set(retention_df["dan"])
+    feedback_df = feedback_df[feedback_df["user_dan"].isin(valid_dans)]
 
-        #final_score = 0.6 * semantic_score + 0.4 * rarity_score
-        scored_matches.append({**row, "match_score": round(base_score + boost, 4)})
-    return sorted(scored_matches, key=lambda x: x["match_score"], reverse=True)[:top_n]
+    return feedback_df
+
+
+def match_retention(text, retention_df, model, keyword_stats=None, top_k=3):
+    doc_embedding = model.encode(text, convert_to_tensor=True)
+
+    # Match against retention schedule CSV
+    retention_descriptions = retention_df["description"].astype(str).tolist()
+    retention_embeddings = model.encode(retention_descriptions, convert_to_tensor=True)
+    retention_similarities = util.cos_sim(doc_embedding, retention_embeddings)[0]
+
+
+    retention_matches = []
+    for i, row in retention_df.iterrows():
+        score = float(retention_similarities[i])
+
+        upload_index = row.get("upload_index", 99)  # fallback to low priority
+        priority_boost = 0.03 if upload_index == 0 else 0.0
+
+        retention_matches.append({
+            "dan": row["dan"],
+            "description": row["description"],
+            "retention_period": row.get("retention_period", ""),
+            "designation": row.get("designation", ""),
+            "match_score": score,
+            "source": "retention_schedule"
+        })
+
+    feedback_df = load_feedback_df()
+    feedback_matches = []
+    if feedback_df is not None and not feedback_df.empty:
+        feedback_texts = feedback_df["summary_text"].astype(str).tolist()
+        feedback_embeddings = model.encode(feedback_texts, convert_to_tensor=True)
+        similarities = util.cos_sim(doc_embedding, feedback_embeddings)[0]
+        dan_lookup = retention_df.drop_duplicates(subset="dan").set_index("dan").to_dict("index")
+
+        for i, row in feedback_df.iterrows():
+            base_score = float(similarities[i])
+            if base_score > 0.95:
+                boost = 1.5
+            elif base_score > 0.85:
+                boost = 1.25
+            elif base_score > 0.8:
+                boost = 1.1
+            else:
+                boost = 1.0
+
+            adjusted_score = (base_score * boost) + 0.05
+            meta = dan_lookup.get(row["user_dan"], {})
+
+            feedback_matches.append({
+                "dan": row["user_dan"],
+                "description": meta.get("description", row["description"]),
+                "retention_period": meta.get("retention_period", row.get("retention_period", "")),
+                "designation": meta.get("designation", row.get("designation", "")),
+                "match_score": adjusted_score,
+                "source": "feedback_log"
+            })
+
+    all_matches = retention_matches + feedback_matches
+    top_matches = sorted(all_matches, key=lambda x: x["match_score"], reverse=True)[:top_k]
+
+    return top_matches
 
 def extract_text_from_pdf_images(pdf_path):
     doc = fitz.open(pdf_path)
@@ -121,26 +189,24 @@ def extract_text(uploaded_file):
 
     return ""
 
-def summarize_with_nlp(text, nlp, max_sents=3):
+def summarize_with_nlp(text, max_sents=3):
+    nlp = load_spacy_model()
     doc = nlp(text)
+
     return "\n".join(str(s) for s in list(doc.sents)[:max_sents])
 
-def load_feedback_keywords(feedback_csv="dan_feedback_log.csv"):
-    dan_keywords = {}
-    if not os.path.exists(feedback_csv):
-        return dan_keywords
-
-    df = pd.read_csv(feedback_csv)
-    grouped = df[df["user_keywords"].notna()].groupby("user_dan")["user_keywords"]
-    for dan, keywords in grouped:
-        all_words = []
-        for kw_str in keywords.dropna():
-            all_words.extend([w.strip().lower() for w in kw_str.split(",")])
-        dan_keywords[dan] = list(set(all_words))
-    return dan_keywords
+def load_feedback_df(path="dan_feedback_log.csv"):
+    try:
+        df = pd.read_csv(path)
+        if df.empty:
+            return pd.DataFrame()
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
-def extract_keywords(text, nlp, user_keywords=None):
+def extract_keywords(text, user_keywords=None):
+    nlp = load_spacy_model()
     doc = nlp(text)
 
     # Grab first meaningful sentence (used as title keyword)
