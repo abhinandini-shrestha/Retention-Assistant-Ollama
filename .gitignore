@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+venv/
+env/
+/retention_schedules/
+.venv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Model and data files
+*.whl
+*.model
+*.bin
+*.pkl
+*.onnx
+*.tflite
+*.pb
+
+# Local data or logs
+*.log
+*.csv
+*.db
+*.sqlite
+.DS_Store
+
+# ollama models (optional)
+~/.ollama/
+models/
+
+# spaCy models (if not packaged)
+en_core_web_sm/
+
+# Tesseract binaries (if bundled)
+tesseract/
+tesseract.exe
+
+# Streamlit cache
+.streamlit/
+*.pyc
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# IDE/editor settings
+.vscode/
+.idea/
