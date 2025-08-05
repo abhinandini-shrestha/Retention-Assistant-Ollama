@@ -170,6 +170,9 @@ if retention_df is not None and not retention_df.empty:
                 if edit_mode_key not in st.session_state:
                     st.session_state[edit_mode_key] = False
 
+                with st.expander("📖 Upload Document Summary"):
+                    st.code(summary)
+
                 # Set edit mode on edit button
                 if st.button("✏️ Edit Classification", key=edit_button_key):
                     st.session_state[edit_mode_key] = True
@@ -225,9 +228,6 @@ if retention_df is not None and not retention_df.empty:
 
                 else:
                     render_read_only_view(top, matches)
-
-                with st.expander("📖 Document Summary"):
-                    st.code(summary)
 
 else:
     st.warning("⚠️ No retention schedule loaded. Upload a file or enable reuse above.")

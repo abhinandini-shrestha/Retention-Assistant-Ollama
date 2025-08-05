@@ -15,12 +15,12 @@ def format_description_md(text: str) -> str:
     return "\n".join(formatted_lines)
 
 def render_read_only_view(top, matches):
-    st.markdown(f"**🥇 Top Match**:")
+    st.markdown(f"**🥇 Top Possible Match**:")
     st.markdown(f"**DAN**: `{top['dan']}`")
     st.markdown(format_description_md(top["description"]))
     st.markdown(f"**Retention**: {top['retention_period']}")
     st.markdown(f"**Designation**: {top['designation']}")
-    st.markdown(f"**Confidence Score:** {top['match_score'] * 100:.0f}%")
+    #st.markdown(f"**Confidence Score:** {top['match_score'] * 100:.0f}%")
     st.markdown("**Other Relevent Matches:**")
     top_matches_df = pd.DataFrame([
         {

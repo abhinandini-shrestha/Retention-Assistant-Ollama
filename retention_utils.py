@@ -11,7 +11,6 @@ from PIL import Image, ImageEnhance, ImageFilter
 from collections import Counter
 from sentence_transformers import util, SentenceTransformer
 import spacy
-import yake
 
 # Lazy-loaded global model
 _nlp = None
@@ -79,8 +78,14 @@ def match_retention(text, retention_df, model, keyword_stats=None, top_k=3):
     for i, row in retention_df.iterrows():
         score = float(retention_similarities[i])
 
-        upload_index = row.get("upload_index", 99)  # fallback to low priority
+        # ✅ Priority boost for first uploaded file
+        upload_index = row.get("upload_index", 99)
         priority_boost = 0.03 if upload_index == 0 else 0.0
+
+        # ❌ Penalty for general retention schedule
+        source_pdf = row.get("source_pdf", "").lower()
+        general_penalty = -0.05 if "state-government-general-records-retention-schedule.pdf" in source_pdf else 0.0
+
 
         retention_matches.append({
             "dan": row["dan"],
