@@ -6,7 +6,7 @@ docx2txt
 PyMuPDF
 sentence-transformers
 Pillow
-spacy
 torch  # Required by sentence-transformers
 scikit-learn  # Required by sentence-transformers
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+spacy>=3.7.1
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
