@@ -15,9 +15,6 @@ from sentence_transformers import util, SentenceTransformer
 # Lazy-loaded global model
 #_nlp = None
 
-def load_embedding_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
 def normalize_text(text):
     text = text.lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)

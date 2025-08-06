@@ -17,9 +17,8 @@ from retention_utils import (
     extract_text,
     #summarize_with_nlp,
     summarize_without_nlp,
-    #load_spacy_model,
-    load_embedding_model
-)
+    #load_spacy_model
+    )
 
 st.set_page_config(page_title="📁 Washington Records Retention Assistant")
 st.title("📁 Washington Records Retention Assistant")
