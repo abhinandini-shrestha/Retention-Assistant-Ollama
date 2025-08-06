@@ -10,16 +10,10 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance, ImageFilter
 from collections import Counter
 from sentence_transformers import util, SentenceTransformer
-import spacy
+#import spacy
 
 # Lazy-loaded global model
-_nlp = None
-
-def load_spacy_model():
-    global _nlp
-    if _nlp is None:
-        _nlp = spacy.load("en_core_web_sm")
-    return _nlp
+#_nlp = None
 
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
@@ -211,18 +205,33 @@ def load_feedback_df(path="dan_feedback_log.csv"):
 
 
 def extract_keywords(text, user_keywords=None):
-    nlp = load_spacy_model()
-    doc = nlp(text)
+    # Clean and tokenize basic words
+    text = text.lower()
+    words = re.findall(r'\b[a-zA-Z]{4,}\b', text)  # only words 4+ letters
 
-    # Grab first meaningful sentence (used as title keyword)
-    title_keyword = next((s.text.strip().lower() for s in doc.sents if len(s.text.strip()) > 5), "")
+    # Get top unique keywords (limited to first N words to keep it simple)
+    word_freq = {}
+    for word in words:
+        word_freq[word] = word_freq.get(word, 0) + 1
 
-    # Extract key noun phrases
-    noun_phrases = [chunk.text.strip().lower() for chunk in doc.noun_chunks if len(chunk.text.strip()) > 3]
+    sorted_keywords = sorted(word_freq, key=word_freq.get, reverse=True)
+    top_keywords = sorted_keywords[:10]  # top 10 frequent words
 
-    # Include user-entered keywords
+    # Include user keywords
     user_kw = [w.strip().lower() for w in user_keywords.split(",")] if user_keywords else []
 
-    # Combine all
-    all_keywords = set(noun_phrases + user_kw + [title_keyword])
-    return ", ".join(sorted(all_keywords))
+    # Combine and deduplicate
+    all_keywords = sorted(set(top_keywords + user_kw))
+    return ", ".join(all_keywords)
+
+def summarize_without_nlp(text, max_sents=3):
+    sentences = re.split(r'(?<=[.!?]) +', text.strip())
+    if not sentences:
+        return "No summary available."
+
+    # Look for sentences containing certain useful keywords
+    priority_keywords = ["summary", "purpose", "includes", "covers", "details"]
+    prioritized = [s for s in sentences if any(k in s.lower() for k in priority_keywords)]
+
+    selected = prioritized[:max_sents] if prioritized else sentences[:max_sents]
+    return " ".join(selected)

@@ -15,8 +15,9 @@ from retention_utils import (
     build_keyword_stats,
     match_retention,
     extract_text,
-    summarize_with_nlp,
-    load_spacy_model,
+    #summarize_with_nlp,
+    summarize_without_nlp,
+    #load_spacy_model,
     load_embedding_model
 )
 
@@ -24,15 +25,15 @@ st.set_page_config(page_title="📁 Washington Records Retention Assistant")
 st.title("📁 Washington Records Retention Assistant")
 
 # Load models
-@st.cache_resource
-def get_nlp():
-    return load_spacy_model()
+#@st.cache_resource
+#def get_nlp():
+    #return load_spacy_model()
 
 @st.cache_resource
 def get_embedder():
     return load_embedding_model()
 
-nlp = get_nlp()
+#nlp = get_nlp()
 model = get_embedder()
 
 # Session state tracking
@@ -158,7 +159,7 @@ if retention_df is not None and not retention_df.empty:
                     st.warning("📄 No readable text found.")
                     continue
 
-                summary = summarize_with_nlp(text)
+                summary = summarize_without_nlp(text)
                 matches = match_retention(text, retention_df, model, keyword_stats)
                 top = matches[0]
 
@@ -170,8 +171,8 @@ if retention_df is not None and not retention_df.empty:
                 if edit_mode_key not in st.session_state:
                     st.session_state[edit_mode_key] = False
 
-                with st.expander("📖 Upload Document Summary"):
-                    st.code(summary)
+                #with st.expander("📖 Upload Document Summary"):
+                    #st.code(summary)
 
                 # Set edit mode on edit button
                 if st.button("✏️ Edit Classification", key=edit_button_key):
