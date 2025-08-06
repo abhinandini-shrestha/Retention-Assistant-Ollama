@@ -26,7 +26,6 @@ def render_read_only_view(top, matches):
         {
             "DAN": m["dan"],
             "Retention": m["retention_period"],
-            "Score (%)": f"{m['match_score'] * 100:.1f}%"
         }
         for m in matches[1:3]
     ])
