@@ -9,7 +9,7 @@ import pandas as pd
 import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance, ImageFilter
 from collections import Counter
-from sentence_transformers import util, SentenceTransformer
+from sentence_transformers import util
 #import spacy
 
 # Lazy-loaded global model

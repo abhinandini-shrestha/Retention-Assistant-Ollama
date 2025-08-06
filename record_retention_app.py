@@ -4,7 +4,7 @@ import re
 import tempfile
 import pandas as pd
 import streamlit as st
-from urllib.parse import quote
+from sentence_transformers import util, SentenceTransformer
 from generate_dan_csv import generate_csv_if_missing, extract_keywords, list_uploaded_sources, clear_retention_schedules
 from ui_helper import format_description_md, render_read_only_view, render_editable_form
 import csv
@@ -29,11 +29,11 @@ st.title("📁 Washington Records Retention Assistant")
     #return load_spacy_model()
 
 @st.cache_resource
-def get_embedder():
-    return load_embedding_model()
+def load_embedding_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 #nlp = get_nlp()
-model = get_embedder()
+model = load_embedding_model()
 
 # Session state tracking
 if "cleared_on_checked" not in st.session_state:
