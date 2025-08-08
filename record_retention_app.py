@@ -72,11 +72,67 @@ available_csvs = sorted([
 
 # ☑️ Use previous schedule toggle
 use_previous_schedule = st.checkbox("Use previous retention schedule", value=True)
-
 retention_df = None
 all_rules = []
 new_upload = False
 retention_files = []
+FEEDBACK_CSV_PATH = "dan_feedback_log.csv"
+
+
+
+def _ensure_feedback_header(path: str):
+    cols = [
+        "timestamp","document_name","title","predicted_dan","user_dan","was_correct",
+        "match_score","keywords","user_keywords","summary_text",
+        "category_description","retention_period","designation"
+        # "schedule_source"  # intentionally not used right now
+    ]
+    if not os.path.exists(path):
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=cols)
+            writer.writeheader()
+
+def _append_feedback_row(row: dict, path: str = FEEDBACK_CSV_PATH):
+    cols = [
+        "timestamp","document_name","title","predicted_dan","user_dan","was_correct",
+        "match_score","keywords","user_keywords","summary_text",
+        "category_description","retention_period","designation"
+    ]
+    _ensure_feedback_header(path)
+    # ensure all keys exist
+    clean = {c: row.get(c, "") for c in cols}
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        csv.DictWriter(f, fieldnames=cols).writerow(clean)
+
+def _collect_keywords_from_sources(retention_df, feedback_csv_path: str) -> list[str]:
+    """We only USE this to help the user fill the one text box; UI stays minimal like the PDF."""
+    suggestions = set()
+    # feedback: keywords, user_keywords
+    try:
+        if os.path.exists(feedback_csv_path):
+            fdf = pd.read_csv(feedback_csv_path)
+            for col in ["keywords","user_keywords"]:
+                if col in fdf.columns:
+                    fdf[col] = fdf[col].fillna("")
+                    for cell in fdf[col].astype(str).tolist():
+                        for tok in re.split(r"[;,]\\s*|\\s*,\\s*", cell):
+                            tok = tok.strip()
+                            if tok:
+                                suggestions.add(tok)
+    except Exception:
+        pass
+    # retention: Keywords / Description-ish columns
+    if retention_df is not None and not retention_df.empty:
+        for col in ["Keywords","keywords","Description of Records","DESCRIPTION OF RECORDS","Category Description","category_description","Description","DESCRIPTION"]:
+            if col in retention_df.columns:
+                for cell in retention_df[col].fillna("").astype(str).tolist():
+                    parts = re.split(r"[;,,]\\s*", cell)
+                    if any(p.strip() for p in parts if p):
+                        for p in parts:
+                            p = p.strip()
+                            if p:
+                                suggestions.add(p)
+    return sorted(suggestions, key=str.lower)
 
 # If user opts not to use previous → show upload option
 if not use_previous_schedule:
@@ -140,6 +196,27 @@ else:
                 retention_df = pd.concat(all_dfs, ignore_index=True)
 
 
+            # Build top 3 from whatever your matcher produced.
+            # Expecting a list[dict] 'matches' with keys: dan, retention, description, designation, score, title (if available)
+        _top3_records = []
+#             if "matches" in locals() and isinstance(matches, list) and len(matches):
+#                 for m in matches[:3]:
+#                     _top3_records.append({
+#                         "DAN": m.get("dan",""),
+#                         "Retention": m.get("retention",""),
+#                         "_desc": m.get("description",""),
+#                         "_designation": m.get("designation",""),
+#                         "_score": m.get("score",""),
+#                         "_title": m.get("title","")
+#                     })
+#             else:
+#                 # empty state that still matches your PDF’s simple table
+#                 _top3_records = [
+#                     {"DAN": "", "Retention": "", "_desc": "", "_designation": "", "_score": "", "_title": ""},
+#                     {"DAN": "", "Retention": "", "_desc": "", "_designation": "", "_score": "", "_title": ""},
+#                     {"DAN": "", "Retention": "", "_desc": "", "_designation": "", "_score": "", "_title": ""},
+#                 ]
+
 # Show preview if we have a DataFrame
 if retention_df is not None and not retention_df.empty:
 
@@ -159,75 +236,75 @@ if retention_df is not None and not retention_df.empty:
                     continue
 
                 summary = summarize_without_nlp(text)
-                matches = match_retention(text, retention_df, model, keyword_stats)
-                top = matches[0]
+                _matches = match_retention(text, retention_df, model, keyword_stats)
+                _selected = _matches[0]
 
-                edit_mode_key = f"edit_mode_{i}"
-                edit_button_key = f"edit_button_{i}"
-                confirm_button_key = f"confirm_button_{i}"
+    #             _top3_df = pd.DataFrame(_top3_records)[["DAN","Retention"]]
+    #             st.dataframe(_top3_df, use_container_width=True, hide_index=True)
 
-                # Initialize only once
-                if edit_mode_key not in st.session_state:
-                    st.session_state[edit_mode_key] = False
 
-                #with st.expander("📖 Upload Document Summary"):
-                    #st.code(summary)
+                context_input = st.text_input("📝 Optional: Add context keywords (comma-separated)...", key=f"context_{i}")
+                keywords = [kw.strip().lower() for kw in context_input.split(",")] if context_input else []
 
-                # Set edit mode on edit button
-                if st.button("✏️ Edit Classification", key=edit_button_key):
-                    st.session_state[edit_mode_key] = True
+                if not text.strip() and not context_input.strip():
+                    st.warning("⚠️ No readable text or context provided.")
+                    continue
 
-                # Render based on session state
-                if st.session_state[edit_mode_key]:
-                    corrected_dan, guidance_keywords = render_editable_form(i, top, retention_df, dan_lookup)
+                combined_text = f"{context_input.strip()} {text.strip()}"
+                keyword_stats = {kw: 3.0 for kw in context_input.strip()}
+                _matches = match_retention(combined_text, retention_df, model, keyword_stats=None)
+                _selected = _matches[0]
 
-                    if st.button("✅ Confirm Update", key=confirm_button_key):
-                        # Save logic...
-                        was_correct = corrected_dan == top["dan"]
-                        title = summary.split("\n")[0] if summary else uploaded_file.name
-                        feedback_log_path = "dan_feedback_log.csv"
-                        log_exists = os.path.exists(feedback_log_path)
+                st.markdown("🥇Top 3 Possible Matches")
+                top_matches_df = pd.DataFrame([
+                        {
+                            "DAN": m["dan"],
+                            "Retention": m["retention_period"],
+                        }
+                        for m in _matches[0:3]
+                    ])
 
-                        try:
-                            selected_row = dan_lookup[corrected_dan]
-                            feedback_log_path = "dan_feedback_log.csv"
-                            log_exists = os.path.exists(feedback_log_path)
+                st.table(top_matches_df)
 
-                            with open(feedback_log_path, "a", newline="", encoding="utf-8") as f:
-                                writer = csv.DictWriter(f, fieldnames=[
-                                    "timestamp", "document_name", "title", "predicted_dan", "user_dan",
-                                        "was_correct", "match_score", "keywords", "user_keywords", "summary_text",
-                                        "description", "retention_period", "designation"
-                                ])
-                                if not log_exists:
-                                    writer.writeheader()
-                                writer.writerow({
-                                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                    "document_name": uploaded_file.name,
-                                    "title": title,
-                                    "predicted_dan": top["dan"],
-                                    "user_dan": corrected_dan,
-                                    "was_correct": was_correct,
-                                    "match_score": round(top["match_score"], 4),
-                                    "keywords": extract_keywords(text, user_keywords=guidance_keywords),
-                                    "user_keywords": guidance_keywords.strip(),
-                                    "summary_text": summary.replace("\n", " "),
-                                    "description": selected_row.get("description", ""),
-                                    "retention_period": selected_row.get("retention_period", ""),
-                                    "designation": selected_row.get("designation", "")
-                                })
-                            st.success("✅ Feedback saved.")
-                        except Exception as e:
-                            st.error(f"Failed to write feedback: {e}")
+                # Readouts block (plain text like the PDF)
+                st.markdown(f"**DAN**: `{_selected['dan']}`")
+                st.markdown(format_description_md(_selected["description"]))
+                st.markdown(f"**Retention**: {_selected['retention_period']}")
+                st.markdown(f"**Designation**: {_selected['designation']}")
 
-                        # Switch to read-only view after confirming
-                        st.session_state[edit_mode_key] = False
-                        # Show read-only view explicitly after confirm
-                        #render_read_only_view(top, matches)
-                        st.rerun()
 
-                else:
-                    render_read_only_view(top, matches)
+                c1, c2 = st.columns([1,1])
+                with c1:
+                    _confirm = st.button("Confirm", type="primary", use_container_width=True, key=f"confirm_{i}" )
+                #with c2:
+                    #st.button("Override DAN", disabled=True, use_container_width=True, help="Disabled for now", key="pdf_like_override")
 
-else:
-    st.warning("⚠️ No retention schedule loaded. Upload a file or enable reuse above.")
+                if _confirm:
+                    # try to infer doc name/title from your existing variables; fall back safely
+                    _doc_name = (
+                        (uploaded_file.name if 'uploaded_file' in locals() and uploaded_file is not None else None)
+                        or (document_name if 'document_name' in locals() else None)
+                        or ""
+                    )
+                    _title = _selected.get("_title","") or (_selected.get("_desc","")[:80] if _selected.get("_desc") else "")
+
+                    # Write feedback row EXACTLY with your schema
+                    _append_feedback_row({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "document_name": _doc_name,
+                        "title": _title,
+                        "predicted_dan": _selected["dan"],
+                        "user_dan": "",
+                        "was_correct": "",
+                        "match_score": _selected["match_score"],
+                        "keywords": "",
+                        "user_keywords": "",
+                        "summary_text": "",
+                        "category_description": _selected["description"],
+                        "retention_period": _selected["retention_period"],
+                        "designation": _selected.get("designation", "")
+                    }, FEEDBACK_CSV_PATH)
+                    st.success("Saved to feedback log.")
+
+
+                # ==== END: PDF-lookalike UI ====

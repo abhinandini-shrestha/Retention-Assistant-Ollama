@@ -10,6 +10,8 @@ import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance, ImageFilter
 from collections import Counter
 from sentence_transformers import util
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
+
 #import spacy
 
 # Lazy-loaded global model
@@ -56,72 +58,118 @@ def load_valid_feedback(feedback_path, retention_df):
     return feedback_df
 
 
-def match_retention(text, retention_df, model, keyword_stats=None, top_k=3):
-    doc_embedding = model.encode(text, convert_to_tensor=True)
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
 
-    # Match against retention schedule CSV
-    retention_descriptions = retention_df["description"].astype(str).tolist()
-    retention_embeddings = model.encode(retention_descriptions, convert_to_tensor=True)
-    retention_similarities = util.cos_sim(doc_embedding, retention_embeddings)[0]
+DAN_REGEX = re.compile(r"\b\d{2}-\d{2}-\d{5}\b")  # e.g., 06-02-61108
 
+def match_retention(
+    text: str,
+    retention_df: pd.DataFrame,
+    model,
+    keyword_stats: Optional[Dict[str, float]] = None,
 
-    retention_matches = []
+    top_k: int = 3,
+    feedback_loader: Optional[Callable[[], Optional[pd.DataFrame]]] = None,
+) -> List[Dict]:
+    if retention_df is None or retention_df.empty:
+        return []
+    print(keyword_stats)
+
+    # Column mapping (case-insensitive)
+    cols = {c.lower(): c for c in retention_df.columns}
+    dan_col  = cols.get("dan")
+    desc_col = cols.get("description") or cols.get("category_description")
+    rp_col   = cols.get("retention_period", "retention_period")
+    des_col  = cols.get("designation", "designation")
+
+    # ---- 1) Exact DAN short-circuit if a DAN-like keyword is present ----
+    user_keywords = list((keyword_stats or {}).keys()) if isinstance(keyword_stats, dict) else []
+    print(user_keywords)
+    dan_like = [k.strip() for k in user_keywords if isinstance(k, str) and DAN_REGEX.fullmatch(k.strip())]
+
+    if dan_like and dan_col:
+        dan_norm = set(retention_df[dan_col].astype(str).str.strip().str.lower())
+        exact_hits = [d for d in dan_like if d.lower() in dan_norm]
+        if exact_hits:
+            rows = retention_df[retention_df[dan_col].astype(str).str.strip().str.lower().isin([d.lower() for d in exact_hits])].head(top_k)
+            return [{
+                "dan": r.get(dan_col, ""),
+                "description": r.get(desc_col, r.get("category_description", "")),
+                "retention_period": r.get(rp_col, ""),
+                "designation": r.get(des_col, ""),
+                "match_score": 999.0,
+                "source": "dan_exact",
+            } for _, r in rows.iterrows()]
+
+    # ---- 2) Semantic path (retention + feedback) ----
+    doc_emb = model.encode(text, convert_to_tensor=True)
+
+    # Retention schedule similarities
+    basis_texts = retention_df[desc_col].astype(str).tolist() if desc_col else retention_df.iloc[:, 0].astype(str).tolist()
+    basis_embs  = model.encode(basis_texts, convert_to_tensor=True)
+    sims        = util.cos_sim(doc_emb, basis_embs)[0]
+
+    ret_matches = []
     for i, row in retention_df.iterrows():
-        score = float(retention_similarities[i])
+        score = float(sims[i])
+        # + priority boost for first uploaded file
+        if row.get("upload_index", 99) == 0:
+            score += 0.03
+        # - penalty for general schedule
+        if "state-government-general-records-retention-schedule.pdf" in str(row.get("source_pdf", "")).lower():
+            score -= 0.05
 
-        # ✅ Priority boost for first uploaded file
-        upload_index = row.get("upload_index", 99)
-        priority_boost = 0.03 if upload_index == 0 else 0.0
-
-        # ❌ Penalty for general retention schedule
-        source_pdf = row.get("source_pdf", "").lower()
-        general_penalty = -0.05 if "state-government-general-records-retention-schedule.pdf" in source_pdf else 0.0
-
-
-        retention_matches.append({
-            "dan": row["dan"],
-            "description": row["description"],
-            "retention_period": row.get("retention_period", ""),
-            "designation": row.get("designation", ""),
+        ret_matches.append({
+            "dan": row.get(dan_col, ""),
+            "description": row.get(desc_col, row.get("category_description", "")),
+            "retention_period": row.get(rp_col, ""),
+            "designation": row.get(des_col, ""),
             "match_score": score,
-            "source": "retention_schedule"
+            "source": "retention_schedule",
         })
 
-    feedback_df = load_feedback_df()
-    feedback_matches = []
-    if feedback_df is not None and not feedback_df.empty:
-        feedback_texts = feedback_df["summary_text"].astype(str).tolist()
-        feedback_embeddings = model.encode(feedback_texts, convert_to_tensor=True)
-        similarities = util.cos_sim(doc_embedding, feedback_embeddings)[0]
-        dan_lookup = retention_df.drop_duplicates(subset="dan").set_index("dan").to_dict("index")
+    # Feedback boosts (optional)
+    fb_matches = []
+    fb_df = feedback_loader() if feedback_loader else _try_load_feedback_df()
+    if fb_df is not None and not fb_df.empty:
+        fb_texts = fb_df["summary_text"].astype(str).tolist()
+        fb_embs  = model.encode(fb_texts, convert_to_tensor=True)
+        fb_sims  = util.cos_sim(doc_emb, fb_embs)[0]
 
-        for i, row in feedback_df.iterrows():
-            base_score = float(similarities[i])
-            if base_score > 0.95:
-                boost = 1.5
-            elif base_score > 0.85:
-                boost = 1.25
-            elif base_score > 0.8:
-                boost = 1.1
-            else:
-                boost = 1.0
+        dan_lookup = {}
+        if dan_col:
+            dan_lookup = retention_df.drop_duplicates(subset=dan_col).set_index(dan_col).to_dict("index")
 
-            adjusted_score = (base_score * boost) + 0.05
-            meta = dan_lookup.get(row["user_dan"], {})
+        for i, r in fb_df.iterrows():
+            base = float(fb_sims[i])
+            boost = 1.5 if base > 0.95 else 1.25 if base > 0.85 else 1.1 if base > 0.8 else 1.0
+            score = (base * boost) + 0.05
 
-            feedback_matches.append({
-                "dan": row["user_dan"],
-                "description": meta.get("description", row["description"]),
-                "retention_period": meta.get("retention_period", row.get("retention_period", "")),
-                "designation": meta.get("designation", row.get("designation", "")),
-                "match_score": adjusted_score,
-                "source": "feedback_log"
+            udan = str(r.get("user_dan", "") or "")
+            meta = dan_lookup.get(udan, {})
+            fb_matches.append({
+                "dan": udan,
+                "description": meta.get(desc_col, r.get("description", "")),
+                "retention_period": meta.get(rp_col, r.get("retention_period", "")),
+                "designation": meta.get(des_col, r.get("designation", "")),
+                "match_score": score,
+                "source": "feedback_log",
             })
 
-    all_matches = retention_matches + feedback_matches
-    top_matches = sorted(all_matches, key=lambda x: x["match_score"], reverse=True)[:top_k]
+    all_matches = ret_matches + fb_matches
+    return sorted(all_matches, key=lambda x: x["match_score"], reverse=True)[:top_k]
 
-    return top_matches
+
+def _try_load_feedback_df() -> Optional[pd.DataFrame]:
+    """Attempt to import a host-app loader; return None if unavailable."""
+    try:
+        from __main__ import load_feedback_df  # provided by host app
+        return load_feedback_df()
+    except Exception:
+        return None
+
+
 
 def extract_text_from_pdf_images(pdf_path):
     doc = fitz.open(pdf_path)
@@ -232,3 +280,13 @@ def summarize_without_nlp(text, max_sents=3):
 
     selected = prioritized[:max_sents] if prioritized else sentences[:max_sents]
     return " ".join(selected)
+
+def load_dan_catalog(csv_path: str) -> pd.DataFrame | None:
+    if not os.path.exists(csv_path):
+        return None
+    try:
+        df = pd.read_csv(csv_path)
+        # expected helpful columns: DAN, Title, Retention, Designation, Category Description
+        return df
+    except Exception:
+        return None
