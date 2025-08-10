@@ -18,7 +18,6 @@ from retention_utils import (
     extract_text,
     summarize_without_nlp,
     clear_popup,
-    dedupe_batch,
     #summarize_with_nlp,
     #load_spacy_model
     )
