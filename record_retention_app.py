@@ -18,6 +18,7 @@ from retention_utils import (
     extract_text,
     summarize_without_nlp,
     clear_popup,
+    dedupe_batch,
     #summarize_with_nlp,
     #load_spacy_model
     )
@@ -39,7 +40,7 @@ st.warning(
 
 st.title("🏛️ DOL - Retention Assistant")
 st.sidebar.markdown(" ## 🧭 Quick Access ")
-st.sidebar.markdown("[⬆️ Top](#dol-retention-assistant)")
+st.sidebar.markdown("↑ [Top](#dol-retention-assistant)")
 
 
 
@@ -160,14 +161,31 @@ if retention_df is not None and not retention_df.empty:
     dan_lookup = retention_df.drop_duplicates(subset="dan").set_index("dan").to_dict("index")
     dan_options = list(dan_lookup.keys())
 
+    displayed_doc_uids = set()
+    seen_doc_uids = st.session_state.setdefault("seen_doc_uids", set()) #to see if the user is trying to upload same document twice
+
     uploaded_files = st.file_uploader("📄 Upload Documents to Classify", type=["pdf", "docx", "txt", "png", "jpg"], accept_multiple_files=True)
     if uploaded_files:
+        dup_names = []
+
         for i, uploaded_file in enumerate(uploaded_files):
             doc_uid = get_document_uid(uploaded_file)
 
+            if doc_uid in displayed_doc_uids:
+                dup_names.append(uploaded_file.name)
+                st.warning(f"⚠️ Duplicate in this batch skipped: **{uploaded_file.name}**")
+                continue
+
+            displayed_doc_uids.add(doc_uid)
+
+            # (Optional) still let the user know if they re-uploaded something seen before
+            first_time_this_session = doc_uid not in seen_doc_uids
+            seen_doc_uids.add(doc_uid)
+
+
             #in-page anchor for each uploads
             st.markdown(f'<a name="anchor_{doc_uid}"></a>', unsafe_allow_html=True)
-            st.sidebar.markdown(f"[{uploaded_file.name}](#anchor_{doc_uid})")
+            st.sidebar.markdown(f"📄[{uploaded_file.name}](#anchor_{doc_uid})")
 
 
             with st.expander(f"📄 Document: {uploaded_file.name}", expanded=True):
@@ -250,5 +268,18 @@ if retention_df is not None and not retention_df.empty:
                     clear_popup(popup_messages)
 
 
+# Export feedback_csv
+if os.path.exists(FEEDBACK_CSV_PATH):
+    df = pd.read_csv(FEEDBACK_CSV_PATH)
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+
+    st.sidebar.download_button(
+        label="⬇️ Download Logs",
+        data=csv_bytes,
+        file_name="feedback_log.csv",
+        mime="text/csv"
+    )
+else:
+    st.sidebar.info("No feedback log available.")
                     
 
