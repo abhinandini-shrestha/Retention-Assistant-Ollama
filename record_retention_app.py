@@ -28,9 +28,20 @@ from ui_helper import format_description_sm
 FEEDBACK_CSV_PATH = "dan_feedback_log.csv"
 
 st.set_page_config(page_title="🏛️ DOL - Retention Assistant")
+
+st.warning(
+    """
+    **Notice:** This tool is designed to assist in understanding and classifying documents according to the retention schedule.
+    It does not replace official review. If you are uncertain about a label, retention period,
+    or archival requirements, please consult your supervisor before finalizing classification.
+    """
+)
+
 st.title("🏛️ DOL - Retention Assistant")
 st.sidebar.markdown(" ## 🧭 Quick Access ")
 st.sidebar.markdown("[⬆️ Top](#dol-retention-assistant)")
+
+
 
 # Load models
 #@st.cache_resource
