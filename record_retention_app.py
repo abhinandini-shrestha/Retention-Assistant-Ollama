@@ -32,7 +32,7 @@ FEEDBACK_CSV_PATH = "dan_feedback_log.csv"
 
 st.set_page_config(page_title="🏛️ Retention Assistant")
 
-st.warning(
+st.error(
     """
     **Notice:** This tool is designed to assist in understanding and classifying documents according to the retention schedule.
     It does not replace official review. If you are uncertain about a label, retention period,
@@ -185,7 +185,7 @@ if retention_df is not None and not retention_df.empty:
     user_dan = list[str]
     seen_doc_uids = st.session_state.setdefault("seen_doc_uids", set()) #to see if the user is trying to upload same document twice
 
-    uploaded_files = st.file_uploader("📄 Upload Documents to Classify", type=["pdf", "docx", "txt", "png", "jpg"], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("📄 Upload One or More Documents to Classify", type=["pdf", "docx", "txt", "png", "jpg"], accept_multiple_files=True)
     if uploaded_files:
         dup_names = []
 
@@ -264,7 +264,7 @@ if retention_df is not None and not retention_df.empty:
                 # Show each match in its own expander
                 for idx, match in enumerate(matches[:3], start=1):
                     star = "⭐ " if idx == 1 else ""
-                    with st.expander(f"[{match['dan']}] {match['dan_title']}", expanded=(idx == 1)):
+                    with st.expander(f"[{match['dan']}] {match['dan_title']}", expanded=(idx < 4)):
                         st.markdown(format_description_sm(f"<b>{match['dan_title']}</b><br>{match['dan_description']}"), unsafe_allow_html=True)
                         st.markdown(f"**Retention Period:** {match['dan_retention']}")
                         st.markdown(f"**Designation:** {match['dan_designation']}")
@@ -317,7 +317,7 @@ if os.path.exists(FEEDBACK_CSV_PATH):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
 
     st.sidebar.download_button(
-        label="⬇️ Download Logs",
+        label="⬇️ Export to .CSV",
         data=csv_bytes,
         file_name="feedback_log.csv",
         mime="text/csv"
