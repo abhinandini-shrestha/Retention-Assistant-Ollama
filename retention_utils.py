@@ -8,8 +8,6 @@ import docx2txt
 import pandas as pd
 import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance, ImageFilter
-from collections import Counter
-from sentence_transformers import util
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 import time
 
@@ -19,20 +17,10 @@ import time
 # Lazy-loaded global model
 #_nlp = None
 
-DAN_REGEX = re.compile(r"\b\d{2}-\d{2}-\d{5}\b")  # e.g., 06-02-61108
-
 def normalize_text(text):
     text = text.lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
-
-def build_keyword_stats(df):
-    keyword_counts = {}
-    for desc in df['dan_description'].fillna("").astype(str):
-        words = re.findall(r'\b\w+\b', desc.lower())
-        for word in words:
-            keyword_counts[word] = keyword_counts.get(word, 0) + 1
-    return keyword_counts
 
 def extract_text(uploaded_file):
     if uploaded_file.name.endswith(".pdf"):
@@ -95,6 +83,88 @@ def extract_text_from_pdf_images(pdf_path):
             if text.strip():
                 all_text.append(text.strip())
     return "\n\n".join(all_text)
+
+
+def try_load_feedback_df() -> Optional[pd.DataFrame]:
+    """Attempt to import a host-app loader; return None if unavailable."""
+    try:
+        from __main__ import load_feedback_df  # provided by host app
+        return load_feedback_df()
+    except Exception:
+        return None
+
+def load_feedback_df(path="dan_feedback_log.csv"):
+    try:
+        df = pd.read_csv(path)
+        if df.empty:
+            return pd.DataFrame()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+def extract_keywords(text, user_keywords=None):
+    # Clean and tokenize basic words
+    text = text.lower()
+    words = re.findall(r'\b[a-zA-Z]{4,}\b', text)  # only words 4+ letters
+
+    # Get top unique keywords (limited to first N words to keep it simple)
+    word_freq = {}
+    for word in words:
+        word_freq[word] = word_freq.get(word, 0) + 1
+
+    sorted_keywords = sorted(word_freq, key=word_freq.get, reverse=True)
+    top_keywords = sorted_keywords[:10]  # top 10 frequent words
+
+    # Include user keywords
+    user_kw = [w.strip().lower() for w in user_keywords.split(",")] if user_keywords else []
+
+    # Combine and deduplicate
+    all_keywords = sorted(set(top_keywords + user_kw))
+    return ", ".join(all_keywords)
+
+def summarize_without_nlp(text, max_sents=3):
+    sentences = re.split(r'(?<=[.!?]) +', text.strip())
+    if not sentences:
+        return "No summary available."
+
+    # Look for sentences containing certain useful keywords
+    priority_keywords = ["summary", "purpose", "includes", "covers", "details"]
+    prioritized = [s for s in sentences if any(k in s.lower() for k in priority_keywords)]
+
+    selected = prioritized[:max_sents] if prioritized else sentences[:max_sents]
+    return " ".join(selected)
+
+
+def clear_popup(popup_message):
+    time.sleep(3)
+    popup_message.empty()
+
+### NOT REQUIRED ###
+
+def summarize_with_nlp(text, max_sents=3):
+    nlp = load_spacy_model()
+    doc = nlp(text)
+
+    return "\n".join(str(s) for s in list(doc.sents)[:max_sents])
+
+
+def sanitize_keywords(raw_keywords):
+    _WORD = re.compile(r"[A-Za-z0-9]+")
+    cleaned = []
+    for kw in raw_keywords:
+        # Extract alphanumeric tokens
+        tokens = _WORD.findall(kw.lower())
+        # Keep pure numbers or words ≥ 2 chars
+        tokens = [t for t in tokens if t.isdigit() or len(t) >= 2]
+        cleaned.extend(tokens)
+    # Remove duplicates but preserve order
+    seen = set()
+    return [x for x in cleaned if not (x in seen or seen.add(x))]
+
+# def load_dan_catalog - REMOVED 
+
+#def load_valid_feedback - REMOVED
+
 
 def match_retention(
     text: str,
@@ -198,70 +268,3 @@ def match_retention(
     all_matches = ret_matches + fb_matches
     return sorted(all_matches, key=lambda x: x["match_score"], reverse=True)[:top_k]
 
-
-def try_load_feedback_df() -> Optional[pd.DataFrame]:
-    """Attempt to import a host-app loader; return None if unavailable."""
-    try:
-        from __main__ import load_feedback_df  # provided by host app
-        return load_feedback_df()
-    except Exception:
-        return None
-
-def load_feedback_df(path="dan_feedback_log.csv"):
-    try:
-        df = pd.read_csv(path)
-        if df.empty:
-            return pd.DataFrame()
-        return df
-    except Exception:
-        return pd.DataFrame()
-
-def extract_keywords(text, user_keywords=None):
-    # Clean and tokenize basic words
-    text = text.lower()
-    words = re.findall(r'\b[a-zA-Z]{4,}\b', text)  # only words 4+ letters
-
-    # Get top unique keywords (limited to first N words to keep it simple)
-    word_freq = {}
-    for word in words:
-        word_freq[word] = word_freq.get(word, 0) + 1
-
-    sorted_keywords = sorted(word_freq, key=word_freq.get, reverse=True)
-    top_keywords = sorted_keywords[:10]  # top 10 frequent words
-
-    # Include user keywords
-    user_kw = [w.strip().lower() for w in user_keywords.split(",")] if user_keywords else []
-
-    # Combine and deduplicate
-    all_keywords = sorted(set(top_keywords + user_kw))
-    return ", ".join(all_keywords)
-
-def summarize_without_nlp(text, max_sents=3):
-    sentences = re.split(r'(?<=[.!?]) +', text.strip())
-    if not sentences:
-        return "No summary available."
-
-    # Look for sentences containing certain useful keywords
-    priority_keywords = ["summary", "purpose", "includes", "covers", "details"]
-    prioritized = [s for s in sentences if any(k in s.lower() for k in priority_keywords)]
-
-    selected = prioritized[:max_sents] if prioritized else sentences[:max_sents]
-    return " ".join(selected)
-
-
-def clear_popup(popup_message):
-    time.sleep(3)
-    popup_message.empty()
-
-### NOT REQUIRED ###
-
-def summarize_with_nlp(text, max_sents=3):
-    nlp = load_spacy_model()
-    doc = nlp(text)
-
-    return "\n".join(str(s) for s in list(doc.sents)[:max_sents])
-
-
-# def load_dan_catalog - REMOVED 
-
-#def load_valid_feedback - REMOVED

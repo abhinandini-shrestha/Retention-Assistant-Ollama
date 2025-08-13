@@ -1,9 +1,10 @@
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false" #Hugging face transformer library
+#os.environ["TOKENIZERS_PARALLELISM"] = "false" #Hugging face transformer library
 import pandas as pd
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
+import numpy as np
 
 from csv_utils import (
     generate_csv_if_missing, 
@@ -13,21 +14,23 @@ from csv_utils import (
     append_user_keywords
 )
 from retention_utils import (
-    build_keyword_stats,
-    match_retention,
     extract_text,
     summarize_without_nlp,
     clear_popup,
+    sanitize_keywords
     #summarize_with_nlp,
     #load_spacy_model
     )
-from ui_helper import format_description_sm
+
+from retention_decision_process import keyword_search_match, match_retention
+
+from ui_helper import format_description_sm, add_footer_note
 
 
 
 FEEDBACK_CSV_PATH = "dan_feedback_log.csv"
 
-st.set_page_config(page_title="🏛️ DOL - Retention Assistant")
+st.set_page_config(page_title="🏛️ Retention Assistant")
 
 st.warning(
     """
@@ -37,9 +40,10 @@ st.warning(
     """
 )
 
-st.title("🏛️ DOL - Retention Assistant")
-st.sidebar.markdown(" ## 🧭 Quick Access ")
-st.sidebar.markdown("↑ [Top](#dol-retention-assistant)")
+st.title("🏛️ Retention Assistant")
+
+st.sidebar.markdown(" ### 🧭 Quick Access ")
+st.sidebar.markdown("↑ [Top](#retention-assistant)")
 
 
 
@@ -48,12 +52,33 @@ st.sidebar.markdown("↑ [Top](#dol-retention-assistant)")
 #def get_nlp():
     #return load_spacy_model()
 
+#nlp = get_nlp()
+
 @st.cache_resource
 def load_embedding_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
-#nlp = get_nlp()
 model = load_embedding_model()
+
+# Single-text embedding
+def embed_fn(text: str) -> np.ndarray:
+    return model.encode([text], convert_to_numpy=True)[0].astype(np.float32)
+
+# Build cache of DAN embeddings
+def build_schedule_embed_cache(retention_df, cols=("dan_title","dan_description","dan_category")):
+    texts = [
+        " ".join(str(row.get(c, "")) for c in cols).strip()
+        for _, row in retention_df.iterrows()
+        if str(row.get("dan", "")).strip()
+    ]
+    dans = [
+        str(row.get("dan", "")).strip()
+        for _, row in retention_df.iterrows()
+        if str(row.get("dan", "")).strip()
+    ]
+    vecs = model.encode(texts, convert_to_numpy=True).astype(np.float32)
+    return dict(zip(dans, vecs))
+
 
 # Session state tracking
 if "cleared_on_checked" not in st.session_state:
@@ -66,11 +91,7 @@ if "last_uploaded_files" not in st.session_state:
 retention_dir = "retention_schedules"
 os.makedirs(retention_dir, exist_ok=True)
 
-# Get all available CSVs from the retention_schedules folder
-available_csvs = sorted([
-    f for f in os.listdir(retention_dir)
-    if f.endswith(".csv") and os.path.isfile(os.path.join(retention_dir, f))
-], key=lambda f: os.path.getctime(os.path.join(retention_dir, f)), reverse=True)
+# available_csvs = sorted([ -Removed 
 
 # ☑️ Use previous schedule toggle
 retention_df = None
@@ -154,13 +175,14 @@ else:
 # Show preview if we have a DataFrame
 if retention_df is not None and not retention_df.empty:
 
-    keyword_stats = build_keyword_stats(retention_df)
+    schedule_embed_cache = build_schedule_embed_cache(retention_df)
 
     # Build DAN lookup dictionary once
-    dan_lookup = retention_df.drop_duplicates(subset="dan").set_index("dan").to_dict("index")
-    dan_options = list(dan_lookup.keys())
+    #dan_lookup = retention_df.drop_duplicates(subset="dan").set_index("dan").to_dict("index")
+    #dan_options = list(dan_lookup.keys())
 
     displayed_doc_uids = set()
+    user_dan = list[str]
     seen_doc_uids = st.session_state.setdefault("seen_doc_uids", set()) #to see if the user is trying to upload same document twice
 
     uploaded_files = st.file_uploader("📄 Upload Documents to Classify", type=["pdf", "docx", "txt", "png", "jpg"], accept_multiple_files=True)
@@ -196,29 +218,51 @@ if retention_df is not None and not retention_df.empty:
                     continue
 
                 #system predicted matches
-                matches = match_retention(text, retention_df, model, keyword_stats)
+                #matches = match_retention(text, retention_df, model, keyword_stats)
+
+                matches = match_retention(
+                    retention_df=retention_df,
+                    doc_text=text,
+                    summary_text=summarize_without_nlp(text),    # can be None
+                    embed_fn=embed_fn,
+                    schedule_embed_cache=schedule_embed_cache,
+                    top_k=10
+                )
                 selected = matches[0]
                 predicted_dan = selected["dan"]
 
+                semantic_score = {r["dan"]: r["match_score"] for r in matches}
+                candidate_dans = [r["dan"] for r in matches]
+
                 #action when user inputs keywords
                 context_input = st.text_input("📝 Optional: Add context keywords (comma-separated)", key=f"context_{doc_uid}")
-                keywords = [kw.strip().lower() for kw in context_input.split(",")] if context_input else []
+                if context_input:
+                    raw_keywords = [kw.strip() for kw in context_input.split(",") if kw.strip()]
+                    user_keywords = sanitize_keywords(raw_keywords)
+                    combined_text = f"{context_input.strip()} {text.strip()}"
+                    
+                    matches = keyword_search_match(
+                        retention_df=retention_df,
+                        user_keywords=user_keywords,  # e.g., ["hearing", "license"]
+                        candidate_dans=candidate_dans,
+                        semantic_score=semantic_score,
+                        top_k=10  # Top N matches to return
+                    )   
+
+                    selected = matches[0]
+                    user_dan = selected["dan"]
+
+                else:
+                    user_keywords = []
 
                 if not text.strip() and not context_input.strip():
                     popup_messages = st.warning("⚠️ No readable text or context provided.")
                     continue
-
-                combined_text = f"{context_input.strip()} {text.strip()}"
-                keyword_stats = {kw: 3.0 for kw in context_input.strip()}
-
-                #match after user inputs keywords
-                matches = match_retention(combined_text, retention_df, model, keyword_stats=None)
-                selected = matches[0]
-                user_dan = selected["dan"]
-
+                
+                
                 st.markdown("🥇Top 3 Possible Matches")
                 # Show each match in its own expander
-                for idx, match in enumerate(matches, start=1):
+                for idx, match in enumerate(matches[:3], start=1):
                     star = "⭐ " if idx == 1 else ""
                     with st.expander(f"[{match['dan']}] {match['dan_title']}", expanded=(idx == 1)):
                         st.markdown(format_description_sm(f"<b>{match['dan_title']}</b><br>{match['dan_description']}"), unsafe_allow_html=True)
@@ -240,7 +284,7 @@ if retention_df is not None and not retention_df.empty:
                     "user_dan": user_dan,
                     "was_correct": predicted_dan == user_dan,
                     "match_score": selected["match_score"],
-                    "user_keywords": ", ".join(keywords),
+                    "user_keywords": selected["match_score"],
                     "dan_title": selected["dan_title"],
                     "dan_category": selected["dan_category"],
                     "dan_retention": selected["dan_retention"],
@@ -282,3 +326,4 @@ else:
     st.sidebar.info("No feedback log available.")
                     
 
+#add_footer_note()
