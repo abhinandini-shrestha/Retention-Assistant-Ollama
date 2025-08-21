@@ -259,7 +259,8 @@ if retention_df is not None and not retention_df.empty:
                     popup_messages = st.warning("⚠️ No readable text or context provided.")
                     continue
                 
-                
+                confirm_match = None
+
                 st.markdown("🥇Top 3 Possible Matches")
                 # Show each match in its own expander
                 for idx, match in enumerate(matches[:3], start=1):
@@ -269,9 +270,11 @@ if retention_df is not None and not retention_df.empty:
                         st.markdown(f"**Retention Period:** {match['dan_retention']}")
                         st.markdown(f"**Designation:** {match['dan_designation']}")
                         st.markdown(f"**Source:** {match['source_pdf']}")
+                        if idx == 1:
+                            confirm_match = st.button("Confirm Match", width=150, type="primary", key=f"confirm_{i}" )
 
 
-                confirm_match = st.button("Confirm Match", width=150, type="primary", key=f"confirm_{i}" )
+                
 
 
                 doc_name = ((uploaded_file.name if 'uploaded_file' in locals() and uploaded_file is not None else None) or "")
@@ -303,12 +306,12 @@ if retention_df is not None and not retention_df.empty:
 
                 st.info("💡 Help improve the system’s accuracy by adding related keywords.")
 
-                feedback_input = st.text_input("🏷️ Add related keywords (comma-separated) to improve this DAN match", placeholder="Example: Business and professional licenses, Complaints and grievances, ...", key=f"feedback_{doc_uid}")
+                # feedback_input = st.text_input("🏷️ Add related keywords (comma-separated) to improve this DAN match", placeholder="Example: Business and professional licenses, Complaints and grievances, ...", key=f"feedback_{doc_uid}")
 
-                if feedback_input:
-                    append_user_keywords(doc_uid, feedback_input, row)
-                    popup_messages = st.success("✅ Keywords appended")
-                    clear_popup(popup_messages)
+                # if feedback_input:
+                #     append_user_keywords(doc_uid, feedback_input, row)
+                #     popup_messages = st.success("✅ Keywords appended")
+                #     clear_popup(popup_messages)
 
 
 # Export feedback_csv
@@ -317,13 +320,15 @@ if os.path.exists(FEEDBACK_CSV_PATH):
     csv_bytes = df.to_csv(index=False).encode("utf-8")
 
     st.sidebar.download_button(
-        label="⬇️ Export to .CSV",
+        label="⬇️ Download Logs",
         data=csv_bytes,
         file_name="feedback_log.csv",
         mime="text/csv"
     )
-else:
-    st.sidebar.info("No feedback log available.")
+    st.sidebar.markdown("_Download all logged feedback as CSV._")
+
+#else:
+   #st.sidebar.info("No feedback log available.")
                     
 
 #add_footer_note()

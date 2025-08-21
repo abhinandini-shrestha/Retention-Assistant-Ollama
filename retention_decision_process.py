@@ -146,7 +146,7 @@ def match_retention(
     w_feedback_freq: float = 0.25,  # boost for frequently used user_dan
     w_keyword_overlap: float = 0.15,# boost from keyword overlap with this DAN row text
     w_summary_overlap: float = 0.10,# boost from summary overlap with this DAN row text
-    gs_penalty: float = 0.20,       # subtract this from score if dan starts with "GS"
+    gs_penalty: float = 0.10,       # subtract this from score if dan starts with "GS"
     dan_text_cols: tuple = ("dan_title", "dan_description", "dan_category"),
     return_builder=None,
 ):
