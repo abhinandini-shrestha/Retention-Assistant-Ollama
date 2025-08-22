@@ -62,17 +62,17 @@ Main dependencies used in this project:
 (All dependencies are listed in requirements.txt)
 
 ## 📂 Project Structure
-
-📦 retention-assistant\
-├── record_retention_app.py     # Main Streamlit app\
-├── match_decision_process.py   # Matching logic (semantic + keyword rules + feedback)\
-├── retention_util.py           # Helper class\
-├── csv_utils.py                # CSV-related tasks (PDF → CSV, feedback log updates)\
-├── retentions_schedule/\
-│   ├── schedules/              # Uploaded retention schedule CSVs\
-├── dan_feedback_log.csv        # User feedback log\
-└── README.md                   # Project documentation\
-
+```bash
+📦 retention-assistant
+├── record_retention_app.py     # Main Streamlit app
+├── match_decision_process.py   # Matching logic (semantic + keyword rules + feedback)
+├── retention_util.py           # Helper class
+├── csv_utils.py                # CSV-related tasks (PDF → CSV, feedback log updates
+├── retentions_schedule/
+├── ├── schedules/              # Uploaded retention schedule CSVs
+├── dan_feedback_log.csv        # User feedback log
+└── README.md                   # Project documentation
+```
 
 ## 📁 Output
 
